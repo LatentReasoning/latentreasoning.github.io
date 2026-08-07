@@ -184,6 +184,12 @@ p { margin: 0 0 1em; }
 .authors { font-size: .85rem; font-weight: 500; line-height: 1.8em; margin: 0; }
 .authors a { color: var(--ink); text-decoration: none; }
 .authors a:hover { text-decoration: underline; }
+.authors sup { line-height: 0; }
+.authors .author sup + sup {
+  font-size: 1.05em;
+  margin-left: .06em;
+  vertical-align: .16em;
+}
 .affiliations { color: var(--quiet-ink); font-size: .75rem; line-height: 1.8em; margin: 0; }
 
 .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: 1rem; }
@@ -250,6 +256,23 @@ p { margin: 0 0 1em; }
 }
 
 .article-body figure.l-page { max-width: 1000px; }
+.article-body .figure-placeholder {
+  align-items: center;
+  aspect-ratio: 16 / 7;
+  background:
+    linear-gradient(135deg, rgba(0, 66, 118, .055), rgba(55, 118, 97, .07)),
+    repeating-linear-gradient(135deg, transparent 0 16px, rgba(0, 0, 0, .018) 16px 17px);
+  border: 1px dashed rgba(0, 66, 118, .32);
+  border-radius: .35rem;
+  color: rgba(0, 0, 0, .42);
+  display: flex;
+  font-family: var(--sans);
+  font-size: 12px;
+  justify-content: center;
+  letter-spacing: .13em;
+  min-height: 180px;
+  text-transform: uppercase;
+}
 .article-body pre {
   background: #f6f8fa;
   border: 1px solid rgba(0, 0, 0, .08);

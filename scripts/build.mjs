@@ -479,17 +479,20 @@ function authorMarkup(authors) {
   return values.map((author) => {
     const item = typeof author === 'string' ? { name: author } : author;
     const name = configInlineMarkup(item.name || 'Anonymous');
-    return item.url
+    const renderedName = item.url
       ? '<a href="' + escapeHtml(item.url) + '" rel="author">' + name + '</a>'
       : name;
+    return '<span class="author">' + renderedName + '</span>';
   }).join(', ');
 }
 
 function affiliationMarkup(affiliations) {
   const values = Array.isArray(affiliations) ? affiliations : [affiliations];
-  return values.filter(Boolean).map((item) => {
-    return '<span>' + configInlineMarkup(typeof item === 'string' ? item : item.name) + '</span>';
-  }).join(' · ');
+  return values.filter(Boolean).map((item, index) => {
+    const value = typeof item === 'string' ? { name: item } : item;
+    const separator = index === 0 ? '' : value.new_line ? '<br>' : ' · ';
+    return separator + '<span>' + configInlineMarkup(value.name) + '</span>';
+  }).join('');
 }
 
 function footerMarkup(config) {

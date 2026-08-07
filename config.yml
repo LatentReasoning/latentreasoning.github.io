@@ -5,5 +5,3 @@ site_description: Notes and research from the Natural Language Computing group.
 base_url: ""
 language: en
 copyright: 2026 BIGAI NLCo Group. All rights reserved.
-header:
-  site_logo: /images/TA_logo.svg
