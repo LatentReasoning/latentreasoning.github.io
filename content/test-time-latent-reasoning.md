@@ -1,11 +1,11 @@
 ---
-title: "Reasoning as Latent-Space Optimization"
-description: "A great latent space is one where complex problems yield to simple gradient ascent."
+title: "Reasoning as Value-Guided Latent-Space Optimization"
+description: "A great latent space is one where following the gradient of value is enough to solve complex problems."
 date: 2026-08-07
-tags: [reasoning, test-time compute, latent space, interpretability]
+tags: [reasoning, test-time compute, latent space, optimization]
 bibliography: test-time-latent-reasoning.bib
 authors:
-  - name: "Hengli Li$^{1,2}$$^*$"
+  - name: "Hengli Li$^{1,2}$"
   - name: "Zilong Zheng$^1$$^✉$"
   - name: "Chi Zhang$^{1,2}$"
   - name: "Song-Chun Zhu$^{1,2}$"
@@ -14,42 +14,51 @@ affiliations:
   - "$^1$ NLCo Lab, Beijing Institute for General Artificial Intelligence"
   - "$^2$ School of Artificial Intelligence for Science, Peking University"
   - "$^3$ University of California, Los Angeles"
-  - name: "$^*$ Core contributor"
+  - name: "$^✉$ Correspondence to zlzheng@bigai.ai"
     new_line: true
-  - "$^✉$ Correspondence to zlzheng@bigai.ai"
 citation_style: apa
 ---
 
-Suppose a language model answers a math problem incorrectly. We could ask it again, sample a hundred solutions, grow a search tree, or update its weights. All of these responses spend more computation, but they spend it in different places.
+Suppose a language model answers a math problem incorrectly. We could ask it again, sample a hundred solutions, grow a search tree, or update its weights. All of these responses spend more computation, but none of them questions _where_ the thinking happens: they search harder in the same discrete space, or they change the model itself.
 
-There is another option: leave the model's weights untouched and optimize the _internal states of this one problem_. The model does not merely try another sentence. It adjusts the continuous vectors from which a sentence will be generated.
+There is another option: leave the weights untouched and optimize the _internal states of this one problem_. The model does not try another sentence. It adjusts the continuous vectors from which a sentence will be generated, a gradient step at a time, guided by a value signal—correctness, model confidence, image quality—until it stops improving. When the optimization ends, the states are discarded; the next problem starts from the original frozen model.
 
-This is **test-time latent reasoning**. The phrase names a small but rapidly developing family of methods rather than a single algorithm, yet the family shares one commitment, and it gives this article its title: treat reasoning itself as optimization in latent space. Instance-specific hidden states become decision variables at inference time. A reward—perhaps correctness, model confidence, or image quality—defines a landscape over those states and supplies a direction of ascent. When the optimization ends, the states disappear; the next problem starts from the original frozen model.
+The methods that do this—collectively, **test-time latent reasoning**—differ in detail, but they share a philosophical hypothesis large enough to organize this entire article:
+
+> **A great latent space is one where following the gradient of value is enough to solve complex problems.**
+
+The sentence makes a precise claim about where the difficulty of reasoning should reside. The optimizers in this literature are deliberately simple—REINFORCE-style estimators, a handful of update steps, in some cases zeroth-order perturbations—so the burden of performance falls on two components. The first is the **latent space**: the representation in which optimization takes place. It determines what a single update can express, how far credit can propagate from a sequence-level outcome back to the states that produced it, and whether better solutions lie within reach of a short optimization trajectory. The second is **value guidance**: the signal—a verifier, a self-reward, a confidence estimate—that defines the objective and orients each step. When such minimal machinery improves reasoning, the improvement must be attributed to these two components rather than to the sophistication of the search itself. The research program, accordingly, is not the design of stronger optimizers; it is the identification of latent spaces, and of value functions over them, under which simple optimization suffices.
 
 <figure class="l-page">
   <img src="/images/test-time-latent-reasoning-figure-1.png" alt="Comparison of weight adaptation, token-space search, and test-time latent reasoning">
   <figcaption><strong>Figure 1.</strong> Three axes of test-time compute. Repeated sampling and tree search explore discrete trajectories; weight adaptation changes the model across or within instances; test-time latent reasoning optimizes temporary continuous states while keeping the model parameters fixed.</figcaption>
 </figure>
 
-## The interface is the bottleneck
+<h2>Table of Contents</h2>
 
-Chain-of-thought (CoT) turned language into a computational scratchpad [@wei2022chain]. This is a remarkably useful interface: reasoning steps can be inspected, edited, verified, and fed back to the model. It is also restrictive. At every step, a high-dimensional hidden state must pass through a vocabulary-sized distribution and collapse to a discrete token. Once the token is sampled, most information in that distribution is gone.
+- [Token space is a poor place for gradients](#token-space-is-a-poor-place-for-gradients)
+- [One objective, three ingredients](#one-objective-three-ingredients)
+- [LatentSeek: value guidance at the boundary of language](#latentseek-value-guidance-at-the-boundary-of-language)
+- [GradCuit: carrying value deeper into the network](#gradcuit-carrying-value-deeper-into-the-network)
+- [The emerging family: a search for the right space and the right value](#the-emerging-family-a-search-for-the-right-space-and-the-right-value)
+- [Conclusion](#conclusion)
+- [Citation](#citation)
 
-The limitation matters most when a model is uncertain between several useful continuations. A latent vector can, in principle, carry aspects of many alternatives at once. A token must commit to one. Natural language also spends capacity on grammar, connective tissue, and exposition—properties valuable for communication but not necessarily for computation.
+## Token space is a poor place for gradients
 
-This observation has produced several responses.
+Chain-of-thought turned language into a computational scratchpad [@wei2022chain]. As an interface it is remarkably useful: reasoning steps can be inspected, edited, verified, and fed back to the model. But consider it as a space for value-guided optimization. Token space is discrete: there are no directions, only alternatives, so a value can rank candidates but never point. At every step, a high-dimensional hidden state must pass through a vocabulary-sized distribution and collapse to a single token; once the token is sampled, most information in that distribution is gone. To improve in this space is to resample and vote, as self-consistency does over complete chains [@wang2023selfconsistency], or to score and branch over partial texts, as Tree of Thoughts does [@yao2023tree]. This is guidance without gradients: every step costs a rollout, and the value's advice arrives only after the fact.
 
-- **Search over language.** Self-consistency samples multiple complete CoTs and votes on the final answer [@wang2023selfconsistency]. Tree of Thoughts scores and expands partial textual states [@yao2023tree]. The representation remains readable, but branching can be expensive.
+The loss matters most when a model is genuinely uncertain among several useful continuations. A latent vector can, in principle, carry aspects of many alternatives at once; a token must commit to one. Natural language also spends capacity on grammar, connective tissue, and exposition—valuable for communication, incidental to computation. If the hypothesis is right—if the right space lets a simple, value-guided step do the work—then the natural project is to relocate reasoning into a space that is continuous, information-rich, and reachable by gradients. The literature has approached that relocation in stages.
 
-- **Learn to reason continuously.** Implicit-CoT methods gradually hide textual steps during training [@deng2024implicit]. Coconut feeds the last hidden state back as the next input embedding instead of decoding it to a token [@hao2025coconut]. These methods alter training so that a model learns how to use a continuous scratchpad.
+- **Learn a continuous scratchpad.** Implicit-CoT methods gradually hide textual steps during training [@deng2024implicit]. Coconut feeds the last hidden state back as the next input embedding instead of decoding it to a token [@hao2025coconut]. Latent Thought Models go a step further and infer per-instance latent vectors at inference time through variational updates [@kong2025ltm]—latent computation, but driven by likelihood rather than by a value placed on the answer. All of these build the space by changing how the model is trained.
 
-- **Construct soft tokens.** Soft Thinking passes a probability-weighted mixture of token embeddings forward, preserving uncertainty across several concepts without additional training [@zhang2025soft]. The continuous state remains tied to the vocabulary simplex.
+- **Relax the vocabulary.** Soft Thinking passes a probability-weighted mixture of token embeddings forward, preserving uncertainty across several concepts without additional training [@zhang2025soft]. The space becomes continuous but remains tied to the vocabulary simplex.
 
-- **Optimize activations.** PPLM established an earlier precedent for differentiating an attribute objective into a frozen language model's activations [@dathathri2020pplm]. Soft and prefix tuning optimize continuous prompts, but ordinarily learn a reusable prompt from a dataset [@li2021prefix]. Test-time latent reasoning instead learns an ephemeral state for one input from feedback available at inference time.
+- **Optimize activations directly.** PPLM established an early precedent by differentiating an attribute objective into a frozen language model's activations [@dathathri2020pplm]. Soft and prefix tuning optimize continuous prompts, though ordinarily as reusable artifacts learned from a dataset [@li2021prefix].
 
-These distinctions are easy to blur. “Latent reasoning” can mean a learned recurrent continuous thought, a soft mixture of token embeddings, ordinary implicit computation in hidden states, or an explicitly optimized activation. Here we focus on the last meaning.
+Test-time latent reasoning takes the final step: an _ephemeral_ state, optimized for _one_ input, under an explicit value available at inference time. "Latent reasoning" is used loosely in the literature—for learned recurrent thoughts, soft token mixtures, ordinary implicit computation in hidden states, or explicitly optimized activations. Here we mean the last: hidden states as decision variables, value as altitude.
 
-## A common mathematical frame
+## One objective, three ingredients
 
 Let $c$ be a problem, $x=(x_1,\ldots,x_T)$ a generated reasoning trajectory, and $\pi_\theta$ a frozen autoregressive model. Ordinary generation samples
 
@@ -57,24 +66,28 @@ $$
 \pi_\theta(x\mid c)=\prod_{t=1}^{T}\pi_\theta(x_t\mid x_{< t},c).
 $$
 
-Test-time reasoning introduces a score $R(x,c)$ and spends an inference budget searching for a high-scoring trajectory [@snell2025scaling]. Best-of-$N$ searches by drawing $N$ leaves. Tree search explores prefixes. Test-time latent reasoning introduces continuous, instance-specific variables $z$ and instead solves
+Test-time reasoning introduces a value $R(x,c)$ and spends an inference budget searching for a high-scoring trajectory [@snell2025scaling]. Best-of-$N$ searches by drawing $N$ leaves. Tree search explores prefixes. Test-time latent reasoning introduces continuous, instance-specific variables $z$ and instead solves
 
 $$
 z^* = \arg\max_z\; \mathbb{E}_{x\sim\pi_\theta(\cdot\mid z,c)}[R(x,c)].
 $$
 
-The parameters $\theta$ never change. This equation is the article's title written in symbols: reasoning about a single problem becomes optimization over a latent space, with the reward supplying the surface to climb. The interesting questions are all hidden inside $z$:
+This is the thesis in symbols: the only search direction the family allows itself is the policy gradient of value with respect to $z$.
+
+The parameters $\theta$ never change, and the update rule—as we will see—stays almost embarrassingly simple across the whole family. That is the point. The objective divides the labor among three ingredients: an optimizer, kept deliberately plain; a value, which supplies direction; and a space, which decides whether that direction can be followed. The interesting questions all concern the second and third:
 
 1. Where in the network does $z$ live?
 2. How does it affect the generated trajectory?
-3. How does a sequence-level reward assign credit back to it?
+3. How does a sequence-level value assign credit back to it?
 4. What prevents optimization from leaving the model's familiar activation manifold?
 
-## LatentSeek: search from the output side
+The methods below are best read as successive answers—each choosing a different space, each guided by a different value, and each discovering how much those two choices alone decide.
 
-For each position $t$, a Transformer produces a final hidden state $z_t$ immediately before the language-model head. Ordinarily, the head turns $z_t$ into logits and samples $x_t$. LatentSeek [@li2025latentseek] cuts the computational graph at this interface and treats a prefix of final hidden states as independent, optimizable variables.
+## LatentSeek: value guidance at the boundary of language
 
-It begins with an ordinary CoT rollout. If that rollout contains $T$ tokens, the method keeps roughly the first $N=\rho T$ hidden states, where $\rho$ is a fractional optimization ratio. These states provide a semantically informed initialization. They are then decoded independently through the frozen LM head:
+For each position $t$, a Transformer produces a final hidden state $z_t$ immediately before the language-model head. This is the outermost latent space available—one linear map away from the vocabulary. LatentSeek [@li2025latentseek] cuts the computational graph at exactly this boundary and treats a prefix of final hidden states as independent, optimizable variables.
+
+The search starts from a sensible initialization: an ordinary CoT rollout. If that rollout contains $T$ tokens, the method keeps roughly the first $N=\rho T$ hidden states, where $\rho$ is a fractional optimization ratio. These states are decoded independently through the frozen LM head:
 
 $$
 \pi(x\mid z,c)
@@ -83,7 +96,7 @@ $$
 \underbrace{\prod_{t=N+1}^{T}\pi_\theta(x_t\mid x_{< t},c)}_{\text{continue autoregressively}}.
 $$
 
-After the latent prefix is converted into tokens, the model finishes the response in the usual way. A self-reward prompt asks the same model to score the solution. LatentSeek then applies a REINFORCE-style update [@williams1992reinforce]:
+After the latent prefix is converted into tokens, the model finishes the response in the usual way. The value is the model's own judgment: a self-reward prompt asks the same model to score the solution. The update is as plain as promised—a REINFORCE-style step [@williams1992reinforce]:
 
 $$
 z_t \leftarrow z_t + \eta\,
@@ -91,20 +104,18 @@ z_t \leftarrow z_t + \eta\,
 \left[R(x,c)\nabla_{z_t}\log \pi_{\text{head}}(x_t\mid z_t)\right].
 $$
 
-This formulation has an appealing property: the search variable is continuous, but the reward can be arbitrary. It need not be differentiable. Reward-weighted log-probability gradients tell each $z_t$ how to make its sampled token more or less likely.
+Note what the simplicity buys: the search variable is continuous, but the value can be arbitrary. It need not be differentiable. Value-weighted log-probability gradients tell each $z_t$ how to make its sampled token more or less likely.
 
-The independence assumption is consequential. It prevents the first latent from monopolizing the update through the autoregressive chain and expands the effective search surface. But it also means that the gradient reaching $z_t$ describes its influence on the token decoded _at the same position_. The influence of that token on later reasoning must pass through a discrete sample. A terminal reward can say that the trajectory was good; it cannot cleanly say which early latent altered which later inference.
-
-That is the credit-assignment gap.
+But every space has a geometry, and this one's limits how far guidance can travel. Treating the latents as independent prevents the first latent from monopolizing the update through the autoregressive chain and expands the effective search surface. The price is that the gradient reaching $z_t$ describes only its influence on the token decoded _at the same position_. Its influence on later reasoning must pass through a discrete sample. A terminal value can say that the trajectory was good; it cannot say which early latent altered which later inference. At the boundary of language, guidance keeps being interrupted by tokens.
 
 <figure class="l-page">
   <img src="/images/LatentSeek.jpg" alt="LatentSeek">
   <figcaption><strong>Figure 2.</strong> LatentSeek [@li2025latentseek]. An initial CoT supplies final-layer hidden states. A prefix of those states is optimized with reward-weighted gradients through the LM head, decoded into tokens, and followed by an ordinary autoregressive continuation. The tokenized prefix is both a useful interface and a discrete bottleneck.</figcaption>
 </figure>
 
-Across GSM8K, MATH-500, and AIME 2024, LatentSeek reports consistent gains over CoT and several sampling or reflection baselines, with improvements that continue as the allowed number of latent updates grows. With a perfect answer verifier, the average gain over CoT becomes much larger, suggesting that the search space contains better solutions than the practical self-reward mechanism can reliably identify.
+Across GSM8K, MATH-500, and AIME 2024, LatentSeek reports consistent gains over CoT and several sampling or reflection baselines, with improvements that continue as the allowed number of latent updates grows. One result dissects the thesis especially cleanly: with a perfect answer verifier in place of self-reward, the average gain over CoT becomes much larger. Same space, same optimizer, better value—much better outcome. The space contains better solutions than the practical value can reliably identify; the terrain outruns the guide.
 
-The qualitative cases are at least as interesting as the aggregate scores. Some optimized prefixes become grammatically broken or semantically opaque while still leading to the correct answer. This may indicate that a model has useful computational paths that do not resemble explanations humans would write. It may also indicate reward exploitation, accidental shortcutting, or off-manifold activation. Correctness alone cannot distinguish these stories.
+The qualitative cases probe from another side. Some optimized prefixes become grammatically broken or semantically opaque while still leading to the correct answer. This may indicate that the model has useful computational paths that do not resemble explanations humans would write. It may also indicate value exploitation, accidental shortcutting, or off-manifold activation. Correctness alone cannot distinguish these stories.
 
 <figure class="l-page">
   <code><span style="color:#9c0000">QUESTION:</span> Two trains leave San Rafael at the same time [...] What’s the distance covered by each train in the two days? <br>
@@ -115,11 +126,11 @@ The qualitative cases are at least as interesting as the aggregate scores. Some 
   <figcaption><strong>Figure 3.</strong> An example of LatentSeek output [@li2025latentseek]. Despite generating linguistically anomalous expressions, the model still arrives at the correct answer.</figcaption>
 </figure>
 
-This is the productive ambiguity in the phrase “seek in the dark”: latent search is less constrained by language, but language was also our main window into what the model was doing.
+That is the productive ambiguity in the phrase "seek in the dark": outside language the search is least constrained—and language was our main window into what the model was doing.
 
-## GradCuit: make the whole continuation differentiable
+## GradCuit: carrying value deeper into the network
 
-GradCuit [@yu2026gradcuit] changes where the latent variables enter the graph. Choose an intermediate layer $\ell$ in an $M$-layer decoder. Run the prompt and previously generated tokens through layers $1{:}\ell$, insert $N$ optimizable latent states, and pass the concatenated sequence through layers $\ell{+}1{:}M$:
+If final hidden states form a flawed space because guidance cannot travel through it, the remedy is to choose a space where it can. GradCuit [@yu2026gradcuit] relocates the latent variables to the network's interior. Choose an intermediate layer $\ell$ in an $M$-layer decoder. Run the prompt and previously generated tokens through layers $1{:}\ell$, insert $N$ optimizable latent states, and pass the concatenated sequence through layers $\ell{+}1{:}M$:
 
 $$
 \pi(x_t\mid x_{< t},z^{(\ell)},c)
@@ -150,69 +161,26 @@ R(x,c)\,
 \right].
 $$
 
-The reward is still sequence-level. The estimator is still policy-gradient-like. But the _path_ is different: a later token can assign gradient directly to an earlier latent through the remaining attention blocks. There is no latent-to-token-to-latent handoff before the continuation can use the optimized state.
-
-This is why “circuit” is more than branding. The same self-attention graph serves as a forward computational route and a backward credit-assignment route.
+The value is still sequence-level. The estimator is still policy-gradient-like. Nothing about the optimizer got smarter. What changed is how far guidance can reach: a later token can now assign credit directly to an earlier latent through the remaining attention blocks, with no latent-to-token-to-latent handoff before the continuation can use the optimized state. This is why "circuit" is more than branding—the same self-attention graph serves as a forward computational route and a backward credit-assignment route. The space was chosen so that value could flow.
 
 <figure class="l-page">
 <img src="/images/gradcuit.png" alt="GradCuit">
   <figcaption><strong>Figure 4.</strong> GradCuit [@yu2026gradcuit]. Optimizable states are inserted at layer $\ell$ between prompt states and continuation states. Forward attention broadcasts their influence to later tokens; reverse-mode differentiation carries token-level credit back along the same paths. Model weights remain frozen.</figcaption>
 </figure>
 
-Across five instruction-tuned backbones, three benchmarks, and two answer formats, GradCuit reports 64.5% average accuracy: 6.6 percentage points above standard CoT and 2.4 points above the strongest enhanced-reasoning baseline in the study. Across seven learning rates, it reduces the standard deviation of accuracy from 1.53 for LatentSeek to 0.82.
+The numbers behave the way the hypothesis predicts. Across five instruction-tuned backbones, three benchmarks, and two answer formats, GradCuit reports 64.5% average accuracy: 6.6 percentage points above standard CoT and 2.4 points above the strongest enhanced-reasoning baseline in the study. Across seven learning rates, it reduces the standard deviation of accuracy from 1.53 for LatentSeek to 0.82. A space that transmits guidance well is also more forgiving to optimize in.
 
-An especially diagnostic ablation replaces the reward gradient with a Gaussian random direction. This random-walk variant remains competitive with LatentSeek, while reward-guided GradCuit adds another 2.4 points on average over random optimization. The result suggests two effects:
+One ablation reads almost as a controlled experiment on the thesis itself. Replace the value gradient with a Gaussian random direction, and this unguided variant remains competitive with LatentSeek; restore the value, and guided optimization adds another 2.4 points on average. Taken as a decomposition of the thesis's two nouns: the space does much of the work before any guidance arrives, and value guidance completes it. The ablation also keeps us honest—we cannot attribute every gain to precise credit assignment when some of it comes from changing the space itself.
 
-- inserting and perturbing a state at a useful intermediate layer already opens alternative trajectories;
-- reward-aligned direction supplies additional, decisive information.
+Where does the guidance land? Measuring, for each continuation token, the norm of its gradient with respect to all optimized latents, GradCuit finds that "because," "therefore," "then," and similar reasoning connectors receive the strongest gradients across GPQA-Diamond, GSM8K, and MATH-500. One interpretation is that optimized latents primarily steer how the model moves _between_ reasoning steps rather than rewriting all content uniformly. This is a first-order sensitivity result, not a complete mechanistic explanation, but it sketches where value enters the trace.
 
-The distinction matters. It prevents us from attributing every gain to precise credit assignment when some comes from changing the inference interface itself.
+### A note on the Jacobian Lens
 
-GradCuit also measures, for each continuation token, the norm of its gradient with respect to all optimized latents. “Because,” “therefore,” “then,” and similar reasoning connectors receive the strongest gradients across GPQA-Diamond, GSM8K, and MATH-500. One interpretation is that optimized latents primarily change how the model moves between reasoning steps rather than rewriting all content uniformly. This is a first-order sensitivity result, not a complete mechanistic explanation, but it gives us a testable picture of where latent control enters the trace.
+Why should the middle of the network be the great space? Interpretability offers an independent—and concurrent—answer. The Jacobian Lens [@gurnee2026jlens], developed in parallel with GradCuit, refines the classic logit lens by asking which directions of an intermediate residual stream are disposed, once transformed by all later layers, to surface as output tokens; Anthropic calls this subspace **J-space** and finds it behaves like a limited-capacity global workspace—silent intermediate results, planned words, causally swappable concepts—concentrated in a middle band of layers. The convergence is striking for work that emerged in parallel: both judge a hidden state by its downstream influence rather than its decodability in place, both rely on Jacobian structure through the later blocks (corpus-averaged for the lens, instance-specific for GradCuit), and both point to the middle of the network, where a representation is formed enough to matter yet still has layers left to act through. The instruments differ—the lens is a reusable, token-indexed readout, GradCuit a per-instance optimizer whose updates need not remain verbalizable—but that is the division of labor: one reads the workspace; the other steers it.
 
-## Jacobian Lens: reading the downstream-facing subspace
+## The emerging family: a search for the right space and the right value
 
-The Jacobian Lens [@gurnee2026jlens] begins from a different question: at an intermediate layer, which directions encode content the model could later put into words?
-
-The ordinary logit lens applies the final unembedding matrix directly to an intermediate residual stream. This implicitly assumes that early and late layers use the same coordinates. The J-lens corrects for how representations are transformed by later layers. For layer $\ell$, it computes a corpus-averaged Jacobian $J_\ell$ mapping perturbations of the layer-$\ell$ residual stream to the final residual stream. A simplified readout is
-
-$$
-\operatorname{JLens}_\ell(h_\ell)
-=
-\operatorname{softmax}
-\left(W_U\,\operatorname{norm}(J_\ell h_\ell)\right),
-$$
-
-where $W_U$ is the model's unembedding matrix. The rows of $W_UJ_\ell$ define token-indexed directions: patterns of intermediate activity that are disposed, across contexts, to make a token more likely to be verbalized later.
-
-Anthropic calls the subspace captured by these directions **J-space**. Their experiments find that it carries silent intermediate results, planned rhyme words, situational assessments, and concepts that can be reported or causally swapped. Workspace-like content appears primarily in a middle band of layers; early layers are closer to a sensory regime, while the final layers become dominated by imminent output. J-space has limited capacity—on the order of tens of concepts at a time—and explains only a modest fraction of total activation variance [@gurnee2026jlens].
-
-<figure class="l-page">
-  <img src="/images/jlens.png" alt="JLens">
-  <figcaption><strong>Figure 5.</strong> The J-lens averages a layer-to-output Jacobian across contexts to build a reusable, token-indexed readout of verbalizable directions. (Image source: @gurnee2026jlens)</figcaption>
-</figure>
-
-The resonance with GradCuit is real:
-
-1. **Both privilege downstream influence over decodability at the current layer.** A raw hidden state matters because of what later computation will do with it.
-2. **Both use Jacobian structure.** J-lens averages a linearized layer-to-output map; GradCuit differentiates the current continuation through later blocks to obtain an instance-specific update.
-3. **Both point to the middle of the network.** J-lens finds a workspace-like intermediate band. GradCuit's layer ablations find early-to-middle placements—roughly 25% to 50% depth—most effective, with task dependence.
-4. **Both expose transition structure.** GradCuit finds high sensitivity on reasoning connectors. J-lens observes intermediate concepts becoming available and then being routed into downstream computation.
-
-But the objects should not be conflated.
-
-| Property            | Jacobian Lens                                  | GradCuit                                             |
-| ------------------- | ---------------------------------------------- | ---------------------------------------------------- |
-| Primary goal        | Interpret and causally probe hidden content    | Improve one answer at test time                      |
-| Jacobian            | Averaged over positions and a corpus           | Local to the current instance and sampled trajectory |
-| Output              | Ranked vocabulary tokens / concept directions  | Reward gradient over latent states                   |
-| State change        | Optional targeted read/write intervention      | Iterative unconstrained latent optimization          |
-| Semantic constraint | Token-indexed verbalizable directions          | No requirement that updates be verbalizable          |
-| Reuse               | Lens matrix is precomputed per model and layer | Latents are discarded after each instance            |
-
-## The emerging family
-
-Test-time latent reasoning is already branching by where the state is inserted and how reward is obtained.
+Seen through this hypothesis, the branching family of methods is a systematic exploration of spaces and values—differing in where the state is inserted and what signal guides it.
 
 | Method     | Optimized object                                  | Feedback                | Key distinction                                                              |
 | ---------- | ------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- |
@@ -222,46 +190,28 @@ Test-time latent reasoning is already branching by where the state is inserted a
 | MILR       | Joint text and image output-side states           | Image-quality critic    | Extends latent search to unified multimodal generation [@mi2026milr]         |
 | DMLR       | Latent think tokens plus selected visual features | Confidence              | Interleaves latent optimization with dynamic visual retrieval [@liu2026dmlr] |
 
-This table reveals that “latent” is not one location. Input embeddings are easy to inject but far from the output objective. Final-layer states are close to the vocabulary but have little downstream network left to transform them. Intermediate states retain both contextual meaning and computational runway. GradCuit's empirical preference for early-to-middle layers is therefore plausible: the representation is formed enough to optimize, yet enough layers remain to absorb and refine the intervention.
+The table's first message is that "latent" is not one location—and that locations are not equally great. Input embeddings are easy to inject but far from the output objective. Final-layer states are close to the vocabulary but have little downstream network left to transform them. Intermediate states retain both contextual meaning and computational runway. GradCuit's empirical preference for early-to-middle layers—roughly 25% to 50% depth, with task dependence—is therefore plausible: the representation is formed enough to optimize, yet enough layers remain to absorb and refine the intervention.
 
-The same trade-off appears in interpretability. Early states may not yet expose the relevant concept; late states may only encode the answer already chosen. The middle is where a thought can be both abstract and consequential.
+The second message sits in the feedback column: self-reward, confidence, a learned critic. Every practical value is cheaper—and weaker—than a true verifier. The family is exploring both nouns of the thesis at once, and its progress will be bounded by whichever lags.
 
-## What would establish a scaling law?
+Interpretability sees the same trade-off over depth. Early states may not yet expose the relevant concept; late states may only encode the answer already chosen. The middle is where a thought can be both abstract and consequential—which may be exactly what makes it steerable by simple gradients.
 
-The phrase _test-time scaling_ should mean more than “performance improved when we ran more steps.” A convincing latent scaling law would describe performance as a function of at least four coupled budgets:
+## Conclusion
 
-$$
-\text{quality}
-=f(\text{latent dimension},\ \text{samples per update},\ \text{update steps},\ \text{reward cost}).
-$$
+Return, finally, to the sentence this article has been circling: _a great latent space is one where following the gradient of value is enough to solve complex problems._ Its deepest implication is not that hidden states are mysterious thoughts. It is that inference need not be a one-way execution of fixed weights: when a frozen model gets one problem wrong, there is somewhere to stand and something to follow—states to revise, and a value to say which revision is better.
 
-It should compare against discrete search at matched total compute, separate search quality from verifier quality, and report when extra optimization begins to overfit the reward. It should also adapt budget per instance. A promising controller might stop when reward improvement saturates, gradient directions become unstable, or independent verifiers disagree.
+The evidence assembled here reads as two tests of that sentence. LatentSeek shows the headroom is real: even at the boundary of language, final hidden states hold better solutions than the model's first pass—more, indeed, than its self-supplied value can yet cash in. GradCuit shows the headroom grows when the space is chosen well: moved to the network's interior, where attention carries value back to every latent, the same simple optimizer becomes both stronger and more stable. Two instruments, one reading: intermediate representations are not transient by-products. They are the terrain on which value-guided search succeeds or fails.
 
-Several research questions follow.
+Much remains before the sentence hardens from philosophical hypothesis into law: reliable values, compute-matched scaling curves, safeguards against off-manifold exploitation, evidence beyond compact verifiable tasks—and, ideally, systems that combine the expressive freedom of continuous optimization with the auditability of a readable workspace.
 
-- **What should be optimized?** A free prefix, a recurrent state, a low-rank subspace, or a sparse set of concept directions?
-- **Where should it live?** Can layer selection be predicted from Jacobian conditioning, workspace onset, or task uncertainty rather than tuned on a benchmark?
-- **How should credit be estimated?** Full backpropagation is informative but costly; perturbation methods are cheaper in memory but noisy. Hybrid low-rank estimators may offer a better frontier.
-- **How can search remain on-manifold?** Trust regions around ordinary activations, learned latent priors, or J-space-aware regularization could reduce pathological states.
-- **Who checks the checker?** Diverse verifiers, process-level feedback, executable tests, and uncertainty-aware aggregation may be more important than another optimization step.
-- **Can latent reasoning remain auditable?** J-lens-style readouts, causal interventions, and projection analyses could track whether gains come from recognizable intermediate computation or opaque shortcuts.
-
-## A different kind of adaptation
-
-The deepest idea in this line of work is not that hidden states are mysterious thoughts. It is that inference need not be a one-way execution of fixed weights.
-
-LatentSeek turns final hidden states into per-instance policy variables. GradCuit embeds those variables inside the Transformer's computation so that the full continuation can assign them credit. The Jacobian Lens shows, from the interpretability side, that some intermediate directions are organized around information the model can later verbalize, control, and use flexibly. Together, these results suggest that intermediate representations are not merely transient by-products. They can be interfaces for search, control, and observation.
-
-But current research still needs reliable objectives, compute-matched scaling curves, safeguards against off-manifold reward exploitation, and evidence beyond compact verifiable tasks. The most interesting future systems may combine the strengths of both worlds: the expressive freedom of continuous optimization and the auditability of a readable workspace.
-
-Test-time latent reasoning asks a simple question with a surprisingly large design space: when a frozen model gets one problem wrong, can we improve _how it thinks about that problem_ without rewriting what it knows? The wager behind reasoning-as-optimization is that the answer turns less on the optimizer than on the space it moves through. A great latent space is one where complex problems yield to simple gradient ascent—and the work ahead is learning to find, and to shape, such spaces.
+But the direction of travel is set. We do not need cleverer search so much as better places to search, and better guides to search with. Where such spaces exist, the field's task is to find them; where they do not, to learn to shape them—until following the gradient of value is enough.
 
 ## Citation
 
 ```bibtex
 @misc{li2026ttlr,
   author = {Li, Hengli and Zheng, Zilong and Zhang, Chi and Zhu, Song-Chun and Wu, Ying Nian},
-  title = {Reasoning as Latent-Space Optimization},
+  title = {Reasoning as Value-Guided Latent-Space Optimization},
   year = {2026},
   url = {https://latentreasoning.github.io/test-time-latent-reasoning}
 }

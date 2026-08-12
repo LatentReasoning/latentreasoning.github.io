@@ -24,7 +24,7 @@ This is a custom static site generator, not a framework. The entire build pipeli
 - **Citations:** a hand-rolled BibTeX parser (`parseBibtex`) plus APA renderer. `[@key]` → parenthetical, `@key` → narrative; citing a key not in the page's declared `bibliography:` file throws at build time. A References section is generated automatically. Only APA is supported.
 - **Math:** `$...$` / `$$...$$` segments are replaced with placeholder markers before markdown-it runs, then restored afterward (`renderMarkdown`), so MathJax (loaded from CDN at runtime) does the actual rendering client-side. Code fences are exempt from this protection.
 - **Charts:** ` ```chart ` fences must contain JSON with `type` and `data`; the config is base64-encoded into a `data-chart-config` attribute and hydrated at runtime by `public/assets/charts.js` using Chart.js from CDN.
-- **TOC:** the sticky sidebar nav is built from `<h2>`/`<h3>` ids in the rendered HTML (`outlineFromHtml`), with scroll tracking in `public/assets/toc.js`.
+- **TOC:** the sticky sidebar nav is built from `<h2>` ids in the rendered HTML (`outlineFromHtml`; `<h3>`s are deliberately excluded), with scroll tracking in `public/assets/toc.js`.
 - **Superscripts in front matter:** author/affiliation strings support `$^1$` / `$^{...}$` notation, rendered by `configInlineMarkup` (not MathJax).
 
 Client-side behavior lives in `public/assets/` (`toc.js`, `charts.js`, `copy-code.js`, `site.css`); MathJax and Chart.js are the only external runtime dependencies, both loaded from CDN.

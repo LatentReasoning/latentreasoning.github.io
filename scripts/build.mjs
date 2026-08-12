@@ -416,7 +416,7 @@ function textFromHtml(html) {
 }
 
 function outlineFromHtml(html) {
-  return [...html.matchAll(/<h([2-3]) id="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)]
+  return [...html.matchAll(/<h(2) id="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/g)]
     .map((match) => ({ level: Number(match[1]), id: match[2], title: textFromHtml(match[3]) }))
     .filter((heading) => heading.id !== 'references');
 }
