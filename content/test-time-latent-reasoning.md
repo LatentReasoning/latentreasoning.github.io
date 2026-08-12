@@ -1,18 +1,19 @@
 ---
-title: "Test-time Latent Reasoning"
-description: "How frozen language models can adapt their internal reasoning at inference time?"
+title: "Reasoning as Latent-Space Optimization"
+description: "A great latent space is one where complex problems yield to simple gradient ascent."
 date: 2026-08-07
 tags: [reasoning, test-time compute, latent space, interpretability]
 bibliography: test-time-latent-reasoning.bib
 authors:
   - name: "Hengli Li$^{1,2}$$^*$"
   - name: "Zilong Zheng$^1$$^✉$"
-  - name: "Chenxi Li$^{1,2}$"
   - name: "Chi Zhang$^{1,2}$"
   - name: "Song-Chun Zhu$^{1,2}$"
+  - name: "Ying Nian Wu$^3$"
 affiliations:
   - "$^1$ NLCo Lab, Beijing Institute for General Artificial Intelligence"
   - "$^2$ School of Artificial Intelligence for Science, Peking University"
+  - "$^3$ University of California, Los Angeles"
   - name: "$^*$ Core contributor"
     new_line: true
   - "$^✉$ Correspondence to zlzheng@bigai.ai"
@@ -23,7 +24,7 @@ Suppose a language model answers a math problem incorrectly. We could ask it aga
 
 There is another option: leave the model's weights untouched and optimize the _internal states of this one problem_. The model does not merely try another sentence. It adjusts the continuous vectors from which a sentence will be generated.
 
-This is **test-time latent reasoning**. The phrase names a small but rapidly developing family of methods rather than a single algorithm. Its defining move is to treat instance-specific hidden states as decision variables at inference time. A reward—perhaps correctness, model confidence, or image quality—then supplies a direction in which to move those states. When the optimization ends, the states disappear; the next problem starts from the original frozen model.
+This is **test-time latent reasoning**. The phrase names a small but rapidly developing family of methods rather than a single algorithm, yet the family shares one commitment, and it gives this article its title: treat reasoning itself as optimization in latent space. Instance-specific hidden states become decision variables at inference time. A reward—perhaps correctness, model confidence, or image quality—defines a landscape over those states and supplies a direction of ascent. When the optimization ends, the states disappear; the next problem starts from the original frozen model.
 
 <figure class="l-page">
   <img src="/images/test-time-latent-reasoning-figure-1.png" alt="Comparison of weight adaptation, token-space search, and test-time latent reasoning">
@@ -56,13 +57,13 @@ $$
 \pi_\theta(x\mid c)=\prod_{t=1}^{T}\pi_\theta(x_t\mid x_{< t},c).
 $$
 
-Test-time reasoning introduces a score $R(x,c)$ and spends an inference budget searching for a high-scoring trajectory. Best-of-$N$ searches by drawing $N$ leaves. Tree search explores prefixes. Test-time latent reasoning introduces continuous, instance-specific variables $z$ and instead solves
+Test-time reasoning introduces a score $R(x,c)$ and spends an inference budget searching for a high-scoring trajectory [@snell2025scaling]. Best-of-$N$ searches by drawing $N$ leaves. Tree search explores prefixes. Test-time latent reasoning introduces continuous, instance-specific variables $z$ and instead solves
 
 $$
 z^* = \arg\max_z\; \mathbb{E}_{x\sim\pi_\theta(\cdot\mid z,c)}[R(x,c)].
 $$
 
-The parameters $\theta$ never change. The interesting questions are all hidden inside $z$:
+The parameters $\theta$ never change. This equation is the article's title written in symbols: reasoning about a single problem becomes optimization over a latent space, with the reward supplying the surface to climb. The interesting questions are all hidden inside $z$:
 
 1. Where in the network does $z$ live?
 2. How does it affect the generated trajectory?
@@ -111,7 +112,7 @@ The qualitative cases are at least as interesting as the aggregate scores. Some 
 <span style="color:#9c0000">CoT:</span> To solve this problem, we need to break it down into steps. [...] So, the distance covered by each train in the two days is 197.5 miles. \boxed{197.5} <br>
 <span style="color:#9c0000">LatentSeek:</span> Let find this„ let’ll more understand it <span style="color:blue">down step two andLet</span> 1: BothThe the trains are same route west both <span style="color:blue">first time on80ward)</span> on same and and can consider they the travel travel same distance of So’s denote the common xd’ they both 80 miles on x have write up an following: [...] Since both trains travel the same distance in each direction, the distance covered by each train is 230 miles. The final answer is: \boxed{230}
   </code>
-  <figcaption><strong>Figure 2.</strong> An example of LatentSeek output [@li2025latentseek]. Despite generating linguistically anomalous expressions, the model still arrives at the correct answer.</figcaption>
+  <figcaption><strong>Figure 3.</strong> An example of LatentSeek output [@li2025latentseek]. Despite generating linguistically anomalous expressions, the model still arrives at the correct answer.</figcaption>
 </figure>
 
 This is the productive ambiguity in the phrase “seek in the dark”: latent search is less constrained by language, but language was also our main window into what the model was doing.
@@ -155,7 +156,7 @@ This is why “circuit” is more than branding. The same self-attention graph s
 
 <figure class="l-page">
 <img src="/images/gradcuit.png" alt="GradCuit">
-  <figcaption><strong>Figure 3.</strong> GradCuit [@yu2026gradcuit]. Optimizable states are inserted at layer $\ell$ between prompt states and continuation states. Forward attention broadcasts their influence to later tokens; reverse-mode differentiation carries token-level credit back along the same paths. Model weights remain frozen.</figcaption>
+  <figcaption><strong>Figure 4.</strong> GradCuit [@yu2026gradcuit]. Optimizable states are inserted at layer $\ell$ between prompt states and continuation states. Forward attention broadcasts their influence to later tokens; reverse-mode differentiation carries token-level credit back along the same paths. Model weights remain frozen.</figcaption>
 </figure>
 
 Across five instruction-tuned backbones, three benchmarks, and two answer formats, GradCuit reports 64.5% average accuracy: 6.6 percentage points above standard CoT and 2.4 points above the strongest enhanced-reasoning baseline in the study. Across seven learning rates, it reduces the standard deviation of accuracy from 1.53 for LatentSeek to 0.82.
@@ -188,7 +189,7 @@ Anthropic calls the subspace captured by these directions **J-space**. Their exp
 
 <figure class="l-page">
   <img src="/images/jlens.png" alt="JLens">
-  <figcaption><strong>Figure 4.</strong> The J-lens averages a layer-to-output Jacobian across contexts to build a reusable, token-indexed readout of verbalizable directions. (Image source: @gurnee2026jlens)</figcaption>
+  <figcaption><strong>Figure 5.</strong> The J-lens averages a layer-to-output Jacobian across contexts to build a reusable, token-indexed readout of verbalizable directions. (Image source: @gurnee2026jlens)</figcaption>
 </figure>
 
 The resonance with GradCuit is real:
@@ -251,16 +252,16 @@ The deepest idea in this line of work is not that hidden states are mysterious t
 
 LatentSeek turns final hidden states into per-instance policy variables. GradCuit embeds those variables inside the Transformer's computation so that the full continuation can assign them credit. The Jacobian Lens shows, from the interpretability side, that some intermediate directions are organized around information the model can later verbalize, control, and use flexibly. Together, these results suggest that intermediate representations are not merely transient by-products. They can be interfaces for search, control, and observation.
 
-But current research works still need reliable objectives, compute-matched scaling curves, safeguards against off-manifold reward exploitation, and evidence beyond compact verifiable tasks. The most interesting future systems may combine the strengths of both worlds: the expressive freedom of continuous optimization and the auditability of a readable workspace.
+But current research still needs reliable objectives, compute-matched scaling curves, safeguards against off-manifold reward exploitation, and evidence beyond compact verifiable tasks. The most interesting future systems may combine the strengths of both worlds: the expressive freedom of continuous optimization and the auditability of a readable workspace.
 
-Test-time latent reasoning asks a simple question with a surprisingly large design space: when a frozen model gets one problem wrong, can we improve _how it thinks about that problem_ without rewriting what it knows?
+Test-time latent reasoning asks a simple question with a surprisingly large design space: when a frozen model gets one problem wrong, can we improve _how it thinks about that problem_ without rewriting what it knows? The wager behind reasoning-as-optimization is that the answer turns less on the optimizer than on the space it moves through. A great latent space is one where complex problems yield to simple gradient ascent—and the work ahead is learning to find, and to shape, such spaces.
 
 ## Citation
 
 ```bibtex
 @misc{li2026ttlr,
-  author = {Li, Hengli and Zheng, Zilong and Li, Chenxi and Zhang, Chi and Zhu, Song-Chun},
-  title = {Test-time Latent Reasoning},
+  author = {Li, Hengli and Zheng, Zilong and Zhang, Chi and Zhu, Song-Chun and Wu, Ying Nian},
+  title = {Reasoning as Latent-Space Optimization},
   year = {2026},
   url = {https://latentreasoning.github.io/test-time-latent-reasoning}
 }
